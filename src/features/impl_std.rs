@@ -3,6 +3,7 @@ use crate::{
     de::{read::Reader, BorrowDecode, BorrowDecoder, Decode, Decoder, DecoderImpl},
     enc::{write::Writer, Encode, Encoder, EncoderImpl},
     error::{DecodeError, EncodeError},
+    impl_borrow_decode,
 };
 use core::time::Duration;
 use std::{
@@ -142,6 +143,7 @@ impl Decode for CString {
         CString::new(vec).map_err(|inner| DecodeError::CStringNulError { inner })
     }
 }
+impl_borrow_decode!(CString);
 
 impl<T> Encode for Mutex<T>
 where
@@ -161,6 +163,15 @@ where
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let t = T::decode(decoder)?;
+        Ok(Mutex::new(t))
+    }
+}
+impl<'de, T> BorrowDecode<'de> for Mutex<T>
+where
+    T: BorrowDecode<'de>,
+{
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let t = T::borrow_decode(decoder)?;
         Ok(Mutex::new(t))
     }
 }
@@ -186,6 +197,15 @@ where
         Ok(RwLock::new(t))
     }
 }
+impl<'de, T> BorrowDecode<'de> for RwLock<T>
+where
+    T: BorrowDecode<'de>,
+{
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let t = T::borrow_decode(decoder)?;
+        Ok(RwLock::new(t))
+    }
+}
 
 impl Encode for SystemTime {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -208,6 +228,7 @@ impl Decode for SystemTime {
         }
     }
 }
+impl_borrow_decode!(SystemTime);
 
 impl Encode for &'_ Path {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -237,6 +258,7 @@ impl Decode for PathBuf {
         Ok(string.into())
     }
 }
+impl_borrow_decode!(PathBuf);
 
 impl Encode for IpAddr {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -266,6 +288,7 @@ impl Decode for IpAddr {
         }
     }
 }
+impl_borrow_decode!(IpAddr);
 
 impl Encode for Ipv4Addr {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -280,6 +303,7 @@ impl Decode for Ipv4Addr {
         Ok(Self::from(buff))
     }
 }
+impl_borrow_decode!(Ipv4Addr);
 
 impl Encode for Ipv6Addr {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -294,6 +318,7 @@ impl Decode for Ipv6Addr {
         Ok(Self::from(buff))
     }
 }
+impl_borrow_decode!(Ipv6Addr);
 
 impl Encode for SocketAddr {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -323,6 +348,7 @@ impl Decode for SocketAddr {
         }
     }
 }
+impl_borrow_decode!(SocketAddr);
 
 impl Encode for SocketAddrV4 {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -338,6 +364,7 @@ impl Decode for SocketAddrV4 {
         Ok(Self::new(ip, port))
     }
 }
+impl_borrow_decode!(SocketAddrV4);
 
 impl Encode for SocketAddrV6 {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
@@ -353,6 +380,7 @@ impl Decode for SocketAddrV6 {
         Ok(Self::new(ip, port, 0, 0))
     }
 }
+impl_borrow_decode!(SocketAddrV6);
 
 impl std::error::Error for EncodeError {}
 impl std::error::Error for DecodeError {}
@@ -393,6 +421,27 @@ where
         Ok(map)
     }
 }
+impl<'de, K, V> BorrowDecode<'de> for HashMap<K, V>
+where
+    K: BorrowDecode<'de> + Eq + std::hash::Hash,
+    V: BorrowDecode<'de>,
+{
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let len = crate::de::decode_slice_len(decoder)?;
+        decoder.claim_container_read::<(K, V)>(len)?;
+
+        let mut map = HashMap::with_capacity(len);
+        for _ in 0..len {
+            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+            decoder.unclaim_bytes_read(core::mem::size_of::<(K, V)>());
+
+            let k = K::borrow_decode(decoder)?;
+            let v = V::borrow_decode(decoder)?;
+            map.insert(k, v);
+        }
+        Ok(map)
+    }
+}
 
 impl<T> Decode for HashSet<T>
 where
@@ -408,6 +457,26 @@ where
             decoder.unclaim_bytes_read(core::mem::size_of::<T>());
 
             let key = T::decode(decoder)?;
+            map.insert(key);
+        }
+        Ok(map)
+    }
+}
+
+impl<'de, T> BorrowDecode<'de> for HashSet<T>
+where
+    T: BorrowDecode<'de> + Eq + Hash,
+{
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let len = crate::de::decode_slice_len(decoder)?;
+        decoder.claim_container_read::<T>(len)?;
+
+        let mut map = HashSet::new();
+        for _ in 0..len {
+            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+            decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+
+            let key = T::borrow_decode(decoder)?;
             map.insert(key);
         }
         Ok(map)
